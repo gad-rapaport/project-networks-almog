@@ -6,9 +6,10 @@ import sys
 # הגדרות קבועות
 # ---------------------------------
 SERVER_HOST = '127.0.0.1'
-SERVER_PORT = 54321  # <--- שיניתי את הפורט
+SERVER_PORT = 54321
 BUFFER_SIZE = 1024
 DOWNLOAD_DIR = r"C:\Users\user\OneDrive\שולחן העבודה\לימודים\תקשורת\networks-projects\project"
+WINDOW_SIZE = 32  # גודל חלון הקבלה בבאפר
 
 
 # ---------------------------------
@@ -37,6 +38,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
 
         save_path = os.path.join(DOWNLOAD_DIR, f"received_{filename}")
         expected_seq_num = 1
+        receive_buffer = {}
         file_received_successfully = False
 
         try:
@@ -47,9 +49,13 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
                     packet, _ = client_socket.recvfrom(BUFFER_SIZE)
 
                     if packet == b'END':
-                        print("\nReceived END signal. File transfer complete.")
-                        file_received_successfully = True
-                        break
+                        if expected_seq_num == 1:
+                            print("\nReceived stray END packet. Ignoring.")
+                            continue
+                        else:
+                            print("\nReceived END signal. File transfer complete.")
+                            file_received_successfully = True
+                            break
 
                     if packet.startswith(b'ERROR|'):
                         print(f"\nServer error: {packet.decode()}")
@@ -68,29 +74,41 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
 
                         expected_checksum = calculate_checksum(data)
 
-                        if seq_num == expected_seq_num and received_checksum == expected_checksum:
-                            sys.stdout.write(f'\rReceived SEQ {seq_num} (OK). Sending ACK {seq_num}')
+                        if received_checksum != expected_checksum:
+                            print(f"\nReceived SEQ {seq_num} but CHECKSUM FAILED. Discarding.")
+                            continue
+
+                        if expected_seq_num <= seq_num < expected_seq_num + WINDOW_SIZE:
+
+                            # ##### שונה: הדפסה נקייה באותה שורה #####
+                            sys.stdout.write(
+                                f'\rReceived packet: {seq_num} | Buffering: {len(receive_buffer)} | Next needed: {expected_seq_num}')
                             sys.stdout.flush()
-                            f.write(data)
 
                             ack_message = f"ACK|{seq_num}".encode()
                             client_socket.sendto(ack_message, server_address)
-                            expected_seq_num += 1
+
+                            if seq_num == expected_seq_num:
+                                f.write(data)
+                                expected_seq_num += 1
+
+                                while expected_seq_num in receive_buffer:
+                                    f.write(receive_buffer[expected_seq_num])
+                                    del receive_buffer[expected_seq_num]
+                                    expected_seq_num += 1
+
+                            else:  # החבילה לא בסדר, אבל תקינה
+                                if seq_num not in receive_buffer:
+                                    receive_buffer[seq_num] = data
+
+                        elif seq_num < expected_seq_num:
+                            # חבילה ישנה (כפילות)
+                            ack_message = f"ACK|{seq_num}".encode()
+                            client_socket.sendto(ack_message, server_address)
 
                         else:
-                            last_good_ack_num = expected_seq_num - 1
-                            if received_checksum != expected_checksum:
-                                print(
-                                    f"\nReceived SEQ {seq_num} but CHECKSUM FAILED. Discarding. Resending ACK {last_good_ack_num}")
-                            elif seq_num < expected_seq_num:
-                                print(
-                                    f"\nReceived DUPLICATE SEQ {seq_num}. Discarding. Resending ACK {last_good_ack_num}")
-                            else:
-                                print(
-                                    f"\nReceived OUT-OF-ORDER SEQ {seq_num}. Discarding. Resending ACK {last_good_ack_num}")
-
-                            ack_message = f"ACK|{last_good_ack_num}".encode()
-                            client_socket.sendto(ack_message, server_address)
+                            # חבילה רחוקה מדי מחוץ לחלון
+                            print(f"\nReceived packet {seq_num} (too far ahead). Discarding.")
 
                     except (ValueError, IndexError):
                         print(f"\nError parsing packet. Ignoring.")
@@ -103,10 +121,10 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
             file_received_successfully = False
 
         if file_received_successfully:
-            print(f"Successfully downloaded and saved to {save_path}")
+            print(f"\nSuccessfully downloaded and saved to {save_path}")
         else:
-            print(f"File download failed for {filename}")
-            if os.path.exists(save_path):
+            print(f"\nFile download failed for {filename}")
+            if os.path.exists(save_path) and not file_received_successfully:
                 try:
                     os.remove(save_path)
                     print(f"Removed partial file: {save_path}")
