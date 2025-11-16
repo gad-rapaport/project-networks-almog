@@ -2,13 +2,12 @@ import socket
 import os
 import sys
 
-# --------------------------------
+# ---------------------------------
 # הגדרות קבועות
-# --------------------------------
+# ---------------------------------
 SERVER_HOST = '127.0.0.1'
-SERVER_PORT = 65432
+SERVER_PORT = 54321  # <--- שיניתי את הפורט
 BUFFER_SIZE = 1024
-# עדכון הנתיב כפי שביקשת
 DOWNLOAD_DIR = r"C:\Users\user\OneDrive\שולחן העבודה\לימודים\תקשורת\networks-projects\project"
 
 
@@ -25,14 +24,12 @@ def calculate_checksum(data):
 # ---------------------------------
 
 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
-    # עטיפת כל הלוגיקה בלולאה חיצונית
     while True:
         filename = input("\nEnter the filename to request (e.g., parsha.txt): ")
         if not filename:
             print("No filename entered. Exiting.")
             break
 
-        # --- אתחול העברה חדשה ---
         request_message = f"REQ|{filename}".encode()
         server_address = (SERVER_HOST, SERVER_PORT)
         client_socket.sendto(request_message, server_address)
@@ -57,7 +54,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
                     if packet.startswith(b'ERROR|'):
                         print(f"\nServer error: {packet.decode()}")
                         file_received_successfully = False
-                        break  # צא מלולאת קבלת החבילות
+                        break
 
                     try:
                         parts = packet.split(b'|', 3)
@@ -71,9 +68,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
 
                         expected_checksum = calculate_checksum(data)
 
-                        # --- לוגיקת GBN Receiver ---
                         if seq_num == expected_seq_num and received_checksum == expected_checksum:
-                            # הדפסה נקייה יותר עם \r
                             sys.stdout.write(f'\rReceived SEQ {seq_num} (OK). Sending ACK {seq_num}')
                             sys.stdout.flush()
                             f.write(data)
@@ -90,7 +85,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
                             elif seq_num < expected_seq_num:
                                 print(
                                     f"\nReceived DUPLICATE SEQ {seq_num}. Discarding. Resending ACK {last_good_ack_num}")
-                            else:  # seq_num > expected_seq_num
+                            else:
                                 print(
                                     f"\nReceived OUT-OF-ORDER SEQ {seq_num}. Discarding. Resending ACK {last_good_ack_num}")
 
@@ -107,12 +102,10 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
             print(f"\nAn error occurred: {e}")
             file_received_successfully = False
 
-        # --- סוף העברת קובץ בודד ---
         if file_received_successfully:
             print(f"Successfully downloaded and saved to {save_path}")
         else:
             print(f"File download failed for {filename}")
-            # נסה למחוק קובץ חלקי אם נוצר
             if os.path.exists(save_path):
                 try:
                     os.remove(save_path)
@@ -120,17 +113,16 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
                 except OSError as e:
                     print(f"Error removing partial file: {e}")
 
-        # --- שאלה אם להמשיך ---
         while True:
             choice = input("\nDo you want to download another file? (yes/no): ").strip().lower()
             if choice in ('yes', 'y'):
-                break  # שובר את לולאת ה"בחירה" וממשיך ללולאה הראשית
+                break
             elif choice in ('no', 'n'):
-                break  # שובר את לולאת ה"בחירה"
+                break
             else:
                 print("Invalid input. Please enter 'yes' or 'no'.")
 
         if choice in ('no', 'n'):
-            break  # שובר את הלולאה הראשית ויוצא מהתוכנית
+            break
 
 print("\nClient shutting down. Goodbye!")
