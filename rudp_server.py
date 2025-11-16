@@ -1,31 +1,58 @@
 import socket
 import os
 import time
+import sys
 
-# הגדרות השרת
+# ---------------------------------
+# הגדרות קבועות
+# ---------------------------------
 HOST = '127.0.0.1'
 PORT = 65432
 BUFFER_SIZE = 1024
 CHUNK_SIZE = 980
-TIMEOUT = 2  # פסק זמן בשניות
-WINDOW_SIZE = 4  # גודל החלון (N)
+TIMEOUT = 2
+WINDOW_SIZE = 4
+# עדכון הנתיב כפי שביקשת
+FILES_DIR = r"C:\Users\user\OneDrive\שולחן העבודה\לימודים\תקשורת\networks-projects\project\files"
 
-FILES_DIR = r"C:\Users\user\OneDrive\שולחן העבודה\לימודים\תקשורת\project\files"
 
-
+# ---------------------------------
+# פונקציות עזר
+# ---------------------------------
 def calculate_checksum(data):
+    """ מחשב סכום בדיקה פשוט על ידי סכום ערכי הבתים. """
     return sum(data)
 
 
+def print_progress_bar(iteration, total, prefix='Progress:', suffix='Complete', length=50, fill='█'):
+    """
+    פונקציית עזר להדפסת פס התקדמות המתעדכן באותה שורה.
+    """
+    percent = ("{0:.1f}").format(100 * (iteration / float(total)))
+    filled_length = int(length * iteration // total)
+    bar = fill * filled_length + '-' * (length - filled_length)
+    # \r (Carriage Return) מחזיר את הסמן לתחילת השורה
+    sys.stdout.write(f'\r{prefix} |{bar}| {percent}% {suffix}')
+    sys.stdout.flush()
+    if iteration == total:
+        sys.stdout.write('\n')
+        sys.stdout.flush()
+
+
+# ---------------------------------
+# הלוגיקה הראשית של השרת
+# ---------------------------------
 print("Starting Go-Back-N server...")
+
 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server_socket:
     server_socket.bind((HOST, PORT))
     print(f"Server is listening on {HOST}:{PORT}")
 
     while True:
-        print("\nWaiting for a file request...")
+        print("\n" + "=" * 30)
+        print("Waiting for a new file request...")
+
         try:
-            # שלב 1: המתנה לבקשה (זה עדיין חוסם, מטפלים בלקוח אחד כל פעם)
             data, addr = server_socket.recvfrom(BUFFER_SIZE)
             request = data.decode()
             print(f"Received request from {addr}: {request}")
@@ -41,7 +68,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server_socket:
 
                 print(f"File '{filename}' found. Preparing chunks...")
 
-                # שלב 2: קריאת כל הקובץ לזיכרון והכנת כל החבילות מראש
+                # שלב 2: הכנת כל החבילות מראש
                 all_packets = []
                 seq_num = 1
                 with open(filepath, 'rb') as f:
@@ -57,61 +84,65 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server_socket:
                 total_packets = len(all_packets)
                 print(f"Total packets to send: {total_packets}")
 
-                # שלב 3: אתחול משתני החלון של GBN
+                # שלב 3: אתחול מנגנון Go-Back-N
                 send_base = 1
                 next_seq_num = 1
-                last_ack_time = time.time()  # זה יהיה הטיימר שלנו
-
+                last_ack_time = time.time()
                 transfer_in_progress = True
+
+                # הדפסה ראשונית של פס ההתקדמות
+                print_progress_bar(0, total_packets)
+
                 while transfer_in_progress:
 
-                    # --- חלק השולח ---
-                    # כל עוד החלון לא מלא, שלח עוד חבילות
+                    # --- חלק א': שליחת חבילות ---
                     while next_seq_num < send_base + WINDOW_SIZE and next_seq_num <= total_packets:
                         packet_to_send = all_packets[next_seq_num - 1]
                         server_socket.sendto(packet_to_send, addr)
-                        print(f"Sent SEQ {next_seq_num}")
+                        # הסרנו את ה-print שהיה פה כדי למנוע הצפה
                         next_seq_num += 1
 
-                    # --- חלק בודק הטיימר ---
+                    # --- חלק ב': בדיקת פסק זמן (Timeout) ---
                     if time.time() - last_ack_time > TIMEOUT:
-                        print(f"!!! Timeout! Going back to N. Resending from {send_base}")
+                        print(f"\n!!! Timeout! Resending from {send_base}")
+
                         # "הולכים אחורה" ושולחים שוב את כל החלון
                         for i in range(send_base, next_seq_num):
-                            print(f"Resending SEQ {i}")
                             server_socket.sendto(all_packets[i - 1], addr)
-                        last_ack_time = time.time()  # אתחול הטיימר מחדש
+                        last_ack_time = time.time()
+                        print_progress_bar(send_base - 1, total_packets)  # עדכן את הפס חזרה
 
-                    # --- חלק מאזין ה-ACK (באופן לא-חוסם) ---
+                    # --- חלק ג': קליטת ACKs (באופן לא-חוסם) ---
                     try:
-                        server_socket.settimeout(0.01)  # אל תחסום, רק תבדוק אם הגיע משהו
+                        server_socket.settimeout(0.01)
                         ack_data, _ = server_socket.recvfrom(BUFFER_SIZE)
                         ack_message = ack_data.decode()
 
                         if ack_message.startswith("ACK|"):
                             ack_num = int(ack_message.split('|')[1])
 
-                            # אם ה-ACK מקדם את הבסיס (ACK מצטבר)
                             if ack_num >= send_base:
                                 send_base = ack_num + 1
-                                print(f"Received ACK {ack_num}. Window base moved to {send_base}")
-                                last_ack_time = time.time()  # אתחול הטיימר
+                                # עדכון פס ההתקדמות במקום הדפסה
+                                print_progress_bar(send_base - 1, total_packets)
+                                last_ack_time = time.time()
 
                     except socket.timeout:
-                        pass  # זה בסדר גמור, פשוט לא הגיע ACK ב-0.01 שניות האלה
+                        pass
 
-                    # בדוק אם סיימנו
+                    # --- חלק ד': בדיקת סיום ---
                     if send_base > total_packets:
                         transfer_in_progress = False
 
-                # סוף הלולאה `while transfer_in_progress`
+                # סיום העברה
+                print_progress_bar(total_packets, total_packets)  # סיום הפס (100%)
                 print(f"Finished sending {filename}.")
-                for _ in range(5):  # שלח END 5 פעמים כדי לוודא הגעה
+                for _ in range(5):
                     server_socket.sendto(b'END', addr)
                     time.sleep(0.01)
 
-                server_socket.settimeout(None)  # בטל פסק זמן
+                server_socket.settimeout(None)
 
         except Exception as e:
             print(f"An error occurred: {e}")
-            server_socket.settimeout(None)  # נקה טיימר במקרה של שגיאה
+            server_socket.settimeout(None)
