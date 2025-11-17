@@ -26,7 +26,7 @@ def calculate_checksum(data):
 
 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_socket:
     while True:
-        filename = input("\nEnter the filename to request (e.g., parsha.txt): ")
+        filename = input("\nEnter the filename to request (the filename): ")
         if not filename:
             print("No filename entered. Exiting.")
             break
